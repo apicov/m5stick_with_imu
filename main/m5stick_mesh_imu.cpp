@@ -385,13 +385,14 @@ void publish_imu_data(void)
         .gyro_z = (int8_t)(gyro_z / 10)
     };
 
-    // Send via vendor model to provisioner (address 0x0001)
-    esp_err_t ret = mesh_model_send_vendor(
+    // Publish via vendor model to configured publish address (0xC001 group)
+    // Using mesh_model_publish_vendor() instead of mesh_model_send_vendor()
+    // so it uses the publish address configured by the provisioner
+    esp_err_t ret = mesh_model_publish_vendor(
         0,                            // Vendor model index (we only have 1)
         VENDOR_MODEL_OP_IMU_DATA,    // Our custom opcode (0xC00001)
         (uint8_t*)&imu_data,         // Pointer to data struct
-        sizeof(imu_data),            // 8 bytes
-        0x0001                       // Destination: provisioner unicast address
+        sizeof(imu_data)             // 8 bytes
     );
 
     // Error handling: Log failures but don't halt
