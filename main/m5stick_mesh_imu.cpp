@@ -1,12 +1,30 @@
-/*
- * ═══════════════════════════════════════════════════════════════════════════
+/* ============================================================================
  *                      M5STICK IMU BLE MESH NODE
- * ═══════════════════════════════════════════════════════════════════════════
+ * ============================================================================
  *
- * EDUCATIONAL PROJECT: High-frequency IMU data streaming over BLE Mesh
+ * 📚 LEARNING ROADMAP:
+ *   ⭐⭐ Intermediate - FreeRTOS tasks, data compression, C++/C interfacing
+ *   ⭐⭐⭐ Advanced - BLE Mesh buffer management, vendor models, scalability
+ *
+ * 🎯 BLE MESH CONCEPTS COVERED:
+ *   • Vendor Models - Custom opcodes for proprietary data formats
+ *   • Message Segmentation - Why 8 bytes matters (11-byte limit)
+ *   • Buffer Management - Network/HCI buffer pools and exhaustion
+ *   • Publish Addressing - Using group 0xC001 for sensor data
+ *   • Dual Model Approach - Standard Sensor + Vendor for flexibility
+ *
+ * 💻 C/C++ TECHNIQUES DEMONSTRATED:
+ *   • C++/C Interfacing - extern "C" linkage for C libraries
+ *   • Struct Packing - __attribute__((packed)) for network protocol
+ *   • Type Casting - Floating point → integer conversions
+ *   • FreeRTOS Tasks - xTaskCreate, priority management, vTaskDelay
+ *   • Auto Keyword - C++11 type inference (auto imu_data = ...)
+ *   • Namespace Resolution - M5.Imu.update() object access
+ *
+ * 🔬 EDUCATIONAL PROJECT: High-frequency IMU streaming over BLE Mesh
  *
  * KEY LEARNING POINTS:
- * ===================
+ * ====================
  *
  * 1. BLE MESH NETWORK LIMITS & BUFFER MANAGEMENT
  *    - BLE Mesh segment size: 11 bytes max payload per segment
@@ -52,12 +70,68 @@
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
-#include <stdio.h>
-#include <M5Unified.h>
+/* ===================================================================
+ * SECTION: Includes and C++/C Interfacing
+ * C++ PATTERN: Mixing C++ libraries with C BLE Mesh stack
+ * DIFFICULTY: ⭐⭐ Intermediate
+ * =================================================================== */
 
+#include <stdio.h>       // C standard library (printf)
+#include <M5Unified.h>   // C++ library for M5StickC hardware
+
+/* C++/C INTERFACING: extern "C" Explained
+ * ========================================
+ *
+ * PROBLEM: C++ Name Mangling
+ * ---------------------------
+ * C++ supports function overloading:
+ *   void foo(int x);
+ *   void foo(float x);  // Same name, different parameters
+ *
+ * To support this, C++ "mangles" function names during compilation:
+ *   void foo(int)   → _Z3fooi   (encoded with type info)
+ *   void foo(float) → _Z3foof   (different encoding)
+ *
+ * C doesn't mangle names:
+ *   void foo(int)   → foo       (exact name, no encoding)
+ *
+ * LINKER PROBLEM:
+ * ---------------
+ * If we compile ble_mesh_node.h as C++, the linker looks for:
+ *   _Z9node_initP11node_config_t  (mangled name)
+ *
+ * But the .c file compiled as C exports:
+ *   node_init  (unmangled name)
+ *
+ * Result: LINK ERROR - undefined reference to node_init!
+ *
+ * SOLUTION: extern "C"
+ * --------------------
+ * extern "C" tells the C++ compiler:
+ * "These functions use C linkage - don't mangle their names"
+ *
+ * Usage:
+ *   extern "C" {
+ *       #include "c_library.h"  // All functions keep C linkage
+ *   }
+ *
+ * WHY THIS FILE IS .cpp NOT .c:
+ * -----------------------------
+ * ✅ M5Unified is a C++ library (requires C++ compiler)
+ * ✅ We use C++ features: auto, namespaces, object syntax
+ * ❌ BLE Mesh stack is pure C (must use extern "C")
+ *
+ * MIXED COMPILATION:
+ * ------------------
+ * This file (.cpp) → C++ compiler → can call both C and C++
+ * ble_mesh_node.c  → C compiler   → exports C linkage functions
+ * M5Unified.cpp    → C++ compiler → exports C++ mangled functions
+ *
+ * The extern "C" bridge lets our C++ code call C functions.
+ */
 extern "C" {
-    #include "ble_mesh_node.h"
-    #include "ble_mesh_models.h"
+    #include "ble_mesh_node.h"    // C library: mesh node management
+    #include "ble_mesh_models.h"  // C library: model definitions
 }
 
 // Provisioning state flag (set by callback when node joins network)
@@ -134,16 +208,66 @@ static int16_t gyro_z = 0;   // Gyroscope Z in dps
  *
  * Total: 2 + 3 + 3 = 8 bytes
  *
- * __attribute__((packed)): Ensures no padding between struct members
+ * C/C++ CRITICAL CONCEPT: Struct Packing
+ * =======================================
+ *
+ * __attribute__((packed)): GCC/Clang attribute for struct layout control
+ *
+ * PROBLEM: Structure Alignment Padding
+ * -------------------------------------
+ * Compilers add "padding" bytes between struct members for performance:
+ *
+ * WITHOUT packed:
+ *   struct {
+ *       uint16_t a;  // 2 bytes
+ *       int8_t b;    // 1 byte
+ *   };
+ *
+ * Memory layout on 32-bit system:
+ *   [a a][b ?][? ?][? ?]  ← 6 bytes due to 4-byte alignment!
+ *    \-/  \-/ \-----/
+ *     2   1      3 padding bytes
+ *
+ * WITH __attribute__((packed)):
+ *   [a a][b]  ← 3 bytes, no padding
+ *
+ * WHY PACKING MATTERS FOR NETWORK PROTOCOLS:
+ * -------------------------------------------
+ * ✅ Exact byte count known at compile-time
+ * ✅ Memory layout matches wire format
+ * ✅ No hidden padding bytes sent over network
+ * ✅ Cross-platform compatibility (sender/receiver agreement)
+ *
+ * OUR STRUCT LAYOUT (packed):
+ * ---------------------------
+ * Offset | Field         | Size | Type
+ * -------|---------------|------|--------
+ * 0-1    | timestamp_ms  | 2    | uint16_t
+ * 2      | accel_x       | 1    | int8_t
+ * 3      | accel_y       | 1    | int8_t
+ * 4      | accel_z       | 1    | int8_t
+ * 5      | gyro_x        | 1    | int8_t
+ * 6      | gyro_y        | 1    | int8_t
+ * 7      | gyro_z        | 1    | int8_t
+ * Total: 8 bytes (guaranteed!)
+ *
+ * VERIFICATION:
+ *   sizeof(imu_compact_data_t) == 8  (compile-time constant)
+ *
+ * TRADE-OFF:
+ * ❌ Slightly slower access (CPU may need unaligned read)
+ * ✅ Exact size control (critical for network efficiency)
+ *
+ * For network protocols, the size benefit always wins!
  */
 typedef struct {
-    uint16_t timestamp_ms;  // Timestamp in milliseconds
-    int8_t accel_x;         // Acceleration X (0.1g units)
-    int8_t accel_y;         // Acceleration Y (0.1g units)
-    int8_t accel_z;         // Acceleration Z (0.1g units)
-    int8_t gyro_x;          // Gyroscope X (10 dps units)
-    int8_t gyro_y;          // Gyroscope Y (10 dps units)
-    int8_t gyro_z;          // Gyroscope Z (10 dps units)
+    uint16_t timestamp_ms;  // Offset 0-1: Timestamp in milliseconds
+    int8_t accel_x;         // Offset 2: Acceleration X (0.1g units)
+    int8_t accel_y;         // Offset 3: Acceleration Y (0.1g units)
+    int8_t accel_z;         // Offset 4: Acceleration Z (0.1g units)
+    int8_t gyro_x;          // Offset 5: Gyroscope X (10 dps units)
+    int8_t gyro_y;          // Offset 6: Gyroscope Y (10 dps units)
+    int8_t gyro_z;          // Offset 7: Gyroscope Z (10 dps units)
 } __attribute__((packed)) imu_compact_data_t;
 
 /*
@@ -166,7 +290,37 @@ void update_imu_data(void)
     // Force IMU sensor to update (reads I2C, updates internal cache)
     M5.Imu.update();
 
-    // Get cached data from M5Unified
+    // C++11 PATTERN: Auto Type Deduction
+    // ===================================
+    //
+    // 'auto' keyword tells compiler to infer type from initializer.
+    //
+    // MANUAL TYPE (verbose):
+    //   m5::IMU_Data imu_data = M5.Imu.getImuData();
+    //
+    // AUTO TYPE (concise):
+    //   auto imu_data = M5.Imu.getImuData();
+    //   ^^^^ Compiler deduces type is m5::IMU_Data
+    //
+    // BENEFITS:
+    // ✅ Less typing (especially for complex template types)
+    // ✅ Easier refactoring (if return type changes, this still works)
+    // ✅ Clearer intent (focus on value, not type minutiae)
+    //
+    // WHEN TO USE:
+    // ✅ Iterator types: auto it = map.begin();
+    // ✅ Lambda expressions: auto lambda = [](int x) { return x*2; };
+    // ✅ Complex template types: auto pair = std::make_pair(1, "hello");
+    // ✅ Library return types you don't care about
+    //
+    // WHEN NOT TO USE:
+    // ❌ When type isn't obvious: auto x = foo(); // What is x?
+    // ❌ For function parameters (not allowed in C++11, only C++14+)
+    // ❌ When explicit type aids understanding
+    //
+    // OUR CASE:
+    // It's clear from context that getImuData() returns IMU data.
+    // Using auto reduces boilerplate.
     auto imu_data = M5.Imu.getImuData();
 
     // Convert floating point to integers with appropriate units
