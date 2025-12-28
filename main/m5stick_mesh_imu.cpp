@@ -401,6 +401,21 @@ void publish_imu_data(void)
     if (ret != ESP_OK) {
         printf("⚠️  IMU send failed: %d\n", ret);
     }
+
+    // Update display with compressed data being sent
+    M5.Display.fillScreen(TFT_BLACK);
+    M5.Display.setTextColor(TFT_WHITE);
+    M5.Display.setTextSize(1);
+    M5.Display.setCursor(0, 0);
+    M5.Display.printf("Sending:\n\n");
+    M5.Display.printf("Accel (0.1g):\n");
+    M5.Display.printf(" X: %d\n", imu_data.accel_x);
+    M5.Display.printf(" Y: %d\n", imu_data.accel_y);
+    M5.Display.printf(" Z: %d\n\n", imu_data.accel_z);
+    M5.Display.printf("Gyro (10dps):\n");
+    M5.Display.printf(" X: %d\n", imu_data.gyro_x);
+    M5.Display.printf(" Y: %d\n", imu_data.gyro_y);
+    M5.Display.printf(" Z: %d\n", imu_data.gyro_z);
 }
 
 /*
@@ -423,10 +438,8 @@ void provisioned_callback(uint16_t unicast_addr)
     M5.Display.printf("Addr: 0x%04X\n", unicast_addr);
     vTaskDelay(pdMS_TO_TICKS(2000));
 
-    M5.Display.fillScreen(TFT_GREEN);
-    M5.Display.setCursor(10, 10);
-    M5.Display.printf("M5Stick IMU\n");
-    M5.Display.printf("Sending data");
+    M5.Display.fillScreen(TFT_BLACK);
+    M5.Display.setTextSize(1);
 }
 
 // Called when node receives a reset command from provisioner
